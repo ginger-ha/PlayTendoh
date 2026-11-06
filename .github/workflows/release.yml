@@ -1,0 +1,125 @@
+name: Release build
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [build-6.0]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 355
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Environment
+        run: |
+          uname -a
+          nproc
+          free -h
+          df -h /
+          git log -1 --oneline
+
+      - name: Free disk space
+        run: |
+          df -h /
+          sudo rm -rf /usr/local/lib/android
+          sudo rm -rf /usr/share/dotnet
+          sudo rm -rf /opt/ghc
+          sudo rm -rf /opt/hostedtoolcache
+          sudo rm -rf /usr/local/share/boost
+          sudo rm -rf /usr/share/swift
+          sudo rm -rf /usr/local/.ghcup
+          sudo rm -rf /opt/microsoft
+          sudo rm -rf /usr/lib/google-cloud-sdk
+          sudo rm -rf /usr/local/share/powershell
+          sudo rm -rf /usr/share/miniconda
+          sudo rm -rf /usr/local/share/chromium
+          sudo apt-get clean
+          df -h /
+
+      - name: Packages
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            clang-18 lld-18 llvm-18-dev libclang-18-dev libclc-18-dev \
+            libllvmspirvlib-18-dev llvm-spirv-18 spirv-tools \
+            cmake ninja-build meson rsync flex bison \
+            glslang-tools pkg-config libarchive-dev libzip-dev libzstd-dev \
+            libssl-dev libfmt-dev libvulkan-dev p7zip-full ffmpeg \
+            python3-mako python3-packaging python3-yaml
+          clang-18 --version | head -1
+          llvm-objdump-18 --version | head -1
+
+      - name: Build tools
+        run: |
+          # Eden and Eglantine want CMake 3.31 or later; Ubuntu 24.04 has 3.28.
+          mkdir -p "$HOME/hosttools"
+          curl -fsSL --retry 3 \
+            https://github.com/Kitware/CMake/releases/download/v3.31.8/cmake-3.31.8-linux-x86_64.tar.gz \
+            -o /tmp/cmake.tar.gz
+          tar -xzf /tmp/cmake.tar.gz -C "$HOME/hosttools"
+          echo "$HOME/hosttools/cmake-3.31.8-linux-x86_64/bin" >> "$GITHUB_PATH"
+
+          # The PS5 OpenGL SDK 1.0.2: its original release is gone from the pinned URL.
+          mkdir -p "$HOME/dl-glsdk"
+          curl -fsSL --retry 3 \
+            https://github.com/darkxex/ps5-opengl/releases/download/v1.0.2/ps5-opengl-sdk-1.0.2.tar.gz \
+            -o "$HOME/dl-glsdk/ps5-opengl-sdk-1.0.2.tar.gz"
+          echo "30d8e51dd062739b629346102be5932728ba714bc50b1bdcdf08306c8843d9a4  $HOME/dl-glsdk/ps5-opengl-sdk-1.0.2.tar.gz" \
+            | sha256sum -c -
+
+          {
+            echo "EDEN_CMAKE_DIR=$HOME/hosttools/cmake-3.31.8-linux-x86_64/bin"
+            echo "EDEN_GL_SDK_ARCHIVE=$HOME/dl-glsdk/ps5-opengl-sdk-1.0.2.tar.gz"
+            echo "RADV_BUILD_JOBS=4"
+            echo "EDEN_JOBS=4"
+            echo "EGLANTINE_JOBS=4"
+          } >> "$GITHUB_ENV"
+
+      - name: Build release
+        run: |
+          set -o pipefail
+          make release JOBS="$(nproc)" 2>&1 | tee build-release.log
+
+      - name: Report
+        if: always()
+        run: |
+          mkdir -p logs
+          cp build-release.log logs/ 2>/dev/null || true
+          df -h > logs/disk.txt
+          find build -maxdepth 4 -name '*.log' -print0 2>/dev/null \
+            | tar --null -czf logs/build-logs.tgz --files-from=- 2>/dev/null || true
+
+      - name: Upload logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs
+          path: logs
+          if-no-files-found: ignore
+          retention-days: 14
+
+      - name: Upload release
+        if: success()
+        uses: actions/upload-artifact@v4
+        with:
+          name: PS5-ECAM-v6.0.0
+          path: |
+            dist/PS5-ECAM-v6.0.0.zip
+            dist/SHA256SUMS
+            dist/ps5cemu-v6.0.0.elf
+            dist/eden-v6.0.0.elf
+            dist/eglantine-v6.0.0.elf
+          if-no-files-found: warn
+          compression-level: 0
+          retention-days: 14
