@@ -75,11 +75,6 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C "$HOME/hosttools"
           echo "$HOME/hosttools/cmake-3.31.8-linux-x86_64/bin" >> "$GITHUB_PATH"
 
-          # Mesa's host-side mesa_clc is built against the host LLVM 18; Ubuntu keeps
-          # llvm-config, llvm-objdump and clang in this folder, not on PATH.
-          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
-          /usr/lib/llvm-18/bin/llvm-config --version
-
           # The PS5 OpenGL SDK 1.0.2: its original release is gone from the pinned URL.
           mkdir -p "$HOME/dl-glsdk"
           curl -fsSL --retry 3 \
@@ -96,6 +91,23 @@ jobs:
             echo "EGLANTINE_JOBS=4"
           } >> "$GITHUB_ENV"
 
+      - name: Fetch dependencies
+        run: |
+          set -o pipefail
+          make deps JOBS="$(nproc)" 2>&1 | tee build-deps.log
+
+      - name: Eglantine host tools
+        run: |
+          # EglantinePS5's own Ubuntu 24.04 setup: LLVM 21 (the Payload SDK's
+          # prospero-* wrappers and RADV's host tools), Meson from PyPI, and the
+          # SPIR-V LLVM translator. Eden's CMake 3.31 is already on PATH.
+          set -o pipefail
+          bash .deps/eglantine/EglantinePS5/tools/ci/setup-ubuntu-24.04.sh \
+            "$HOME/hosttools/spirv-llvm-translator" 3> "$RUNNER_TEMP/eglantine-env" 2>&1 \
+            | tee build-eglantine-setup.log
+          cat "$RUNNER_TEMP/eglantine-env" >> "$GITHUB_ENV"
+          cat "$RUNNER_TEMP/eglantine-env"
+
       - name: Build release
         run: |
           set -o pipefail
@@ -106,6 +118,8 @@ jobs:
         run: |
           mkdir -p logs
           cp build-release.log logs/ 2>/dev/null || true
+          cp build-deps.log logs/ 2>/dev/null || true
+          cp build-eglantine-setup.log logs/ 2>/dev/null || true
           df -h > logs/disk.txt
           find build -maxdepth 4 -name '*.log' -print0 2>/dev/null \
             | tar --null -czf logs/build-logs.tgz --files-from=- 2>/dev/null || true
