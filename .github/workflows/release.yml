@@ -75,6 +75,11 @@ jobs:
           tar -xzf /tmp/cmake.tar.gz -C "$HOME/hosttools"
           echo "$HOME/hosttools/cmake-3.31.8-linux-x86_64/bin" >> "$GITHUB_PATH"
 
+          # Mesa's host-side mesa_clc is built against the host LLVM 18; Ubuntu keeps
+          # llvm-config, llvm-objdump and clang in this folder, not on PATH.
+          echo "/usr/lib/llvm-18/bin" >> "$GITHUB_PATH"
+          /usr/lib/llvm-18/bin/llvm-config --version
+
           # The PS5 OpenGL SDK 1.0.2: its original release is gone from the pinned URL.
           mkdir -p "$HOME/dl-glsdk"
           curl -fsSL --retry 3 \
